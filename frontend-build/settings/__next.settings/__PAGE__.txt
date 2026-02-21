@@ -1,0 +1,6 @@
+1:"$Sreact.fragment"
+2:I[37492,["/_next/static/chunks/0f5579fc4eb46a5b.js","/_next/static/chunks/22da1b2016242df7.js","/_next/static/chunks/b01ef9b95906343b.js"],"ConnectionStatusWidget"]
+3:I[15493,["/_next/static/chunks/a758b365cf9f9c86.js","/_next/static/chunks/1b551f5218a3cea6.js"],"OutletBoundary"]
+4:"$Sreact.suspense"
+0:{"buildId":"tbIjgvsi3I-rk8NsA_ufS","rsc":["$","$1","c",{"children":[["$","div",null,{"className":"space-y-6","children":[["$","div",null,{"className":"flex items-center justify-between","children":["$","h2",null,{"className":"text-3xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-600 drop-shadow-sm pb-1","children":"Configuración"}]}],["$","div",null,{"className":"grid gap-6 md:grid-cols-2","children":["$","$L2",null,{}]}]]}],[["$","script","script-0",{"src":"/_next/static/chunks/b01ef9b95906343b.js","async":true}]],["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"loading":null,"isPartial":false}
+5:null
