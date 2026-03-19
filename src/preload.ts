@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getScannedDirectories: () => ipcRenderer.invoke('get-scanned-directories'),
     saveScannedDirectory: (dirPath: string) => ipcRenderer.invoke('save-scanned-directory', dirPath),
     scanDirectory: (dirPath: string) => ipcRenderer.invoke('scan-directory', dirPath),
+    selectFiles: () => ipcRenderer.invoke('select-files'),
     saveCsv: (filePath: string, data: any) => ipcRenderer.invoke('save-csv', filePath, data),
     loadCsv: (filePath: string) => ipcRenderer.invoke('load-csv', filePath),
     analyzeImage: (filePath: string, prompt?: string) => ipcRenderer.invoke('analyze-image', filePath, prompt)

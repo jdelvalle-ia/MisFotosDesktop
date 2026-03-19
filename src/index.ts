@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, session } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { scanDirectoryHandler, analyzeImageHandler, generateCSV, parseCSV } from './library';
 
 // Disable security warnings in development mode (e.g. CSP unsafe-eval from Webpack)
@@ -8,7 +9,9 @@ if (!app.isPackaged) {
   process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
 }
 
-const frontendBuildPath = path.join(app.getAppPath(), 'frontend-build');
+const frontendBuildPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'frontend-build')
+  : path.join(app.getAppPath(), 'frontend-build');
 
 // Make app:// protocol privileged before app is ready
 protocol.registerSchemesAsPrivileged([
@@ -24,9 +27,10 @@ protocol.registerSchemesAsPrivileged([
     }
   },
   {
-    scheme: 'local-file',
+    scheme: 'mifoto',
     privileges: {
       secure: true,
+      standard: true,
       supportFetchAPI: true,
       corsEnabled: true,
       stream: true,
@@ -66,60 +70,70 @@ const createWindow = (): void => {
   // }
 };
 
-// This method will be called when Electron has finished
-app.on('ready', () => {
-  protocol.registerFileProtocol('local-file', (request, callback) => {
-    const urlStr = request.url.replace(/^local-file:\/\//, '');
+// This method will be called when Electron has finished initialization
+app.whenReady().then(() => {
+  console.log("[MAIN] App is ready, registering protocols...");
+
+  // Register mifoto protocol for media streaming
+  protocol.handle('mifoto', async (request) => {
     try {
-      return callback({ path: path.normalize(decodeURIComponent(urlStr)) });
-    }
-    catch (error) {
-      console.error('Error in local-file:', error);
-      return callback({ error: -2 }); // FAILED
+      const parsedUrl = new URL(request.url);
+      let urlPart = parsedUrl.pathname;
+
+      // If hostname is used as a drive letter (e.g., mifoto://C:/...)
+      if (parsedUrl.hostname && parsedUrl.hostname !== '-') {
+        urlPart = parsedUrl.hostname + (parsedUrl.hostname.endsWith(':') ? '' : ':') + urlPart;
+      }
+
+      // Remove leading slash from pathname
+      if (urlPart.startsWith('/')) urlPart = urlPart.substring(1);
+
+      urlPart = decodeURIComponent(urlPart);
+      const filePath = path.normalize(urlPart);
+
+      if (!fs.existsSync(filePath)) {
+        console.warn(`[MIFOTO] File Not Found: ${filePath}`);
+        return new Response('File Not Found', { status: 404 });
+      }
+
+      const fileUrl = pathToFileURL(filePath).toString();
+      return await net.fetch(fileUrl);
+    } catch (error) {
+      console.error('[MIFOTO] Handler Error:', error);
+      return new Response('Internal error', { status: 500 });
     }
   });
 
-  protocol.registerFileProtocol('app', (request, callback) => {
-    let urlPart = request.url.substring(6); // remove 'app://'
-    if (urlPart.startsWith('-/')) urlPart = urlPart.substring(2);
-    if (urlPart === '-' || urlPart === '') urlPart = 'index.html';
-
-    urlPart = decodeURIComponent(urlPart);
-    // Normalize path to fix Windows leading slash issues (e.g. /_next/static)
-    if (urlPart.startsWith('/')) urlPart = urlPart.substring(1);
-
-    const filePath = path.join(frontendBuildPath, urlPart);
+  // Register app protocol using the new handler API
+  protocol.handle('app', async (request) => {
     console.log(`[APP-PROTOCOL] Request: ${request.url}`);
-    console.log(`[APP-PROTOCOL] Resolved Path: ${filePath}`);
-
     try {
-      // 1. Try the exact file path
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        const finalPath = path.normalize(filePath);
-        return callback({ path: finalPath });
-      }
+      let urlPart = request.url.substring(6); // remove 'app://'
+      if (urlPart.startsWith('-/')) urlPart = urlPart.substring(2);
+      if (urlPart === '-' || urlPart === '') urlPart = 'index.html';
 
-      // 2. Try appending .html (Next.js statically exported pages like /settings or /gallery)
-      if (fs.existsSync(filePath + '.html')) {
-        const finalPath = path.normalize(filePath + '.html');
-        return callback({ path: finalPath });
-      }
+      urlPart = decodeURIComponent(urlPart);
+      if (urlPart.startsWith('/')) urlPart = urlPart.substring(1);
 
-      // 3. Try index.html inside a directory
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
-        const indexFilePath = path.join(filePath, 'index.html');
-        if (fs.existsSync(indexFilePath)) {
-          const finalPath = path.normalize(indexFilePath);
-          return callback({ path: finalPath });
+      let filePath = path.join(frontendBuildPath, urlPart);
+
+      // Fallback logic for static export
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        if (fs.existsSync(filePath + '.html')) {
+          filePath += '.html';
+        } else if (fs.existsSync(path.join(filePath, 'index.html'))) {
+          filePath = path.join(filePath, 'index.html');
+        } else {
+          filePath = path.join(frontendBuildPath, 'index.html');
         }
       }
 
-      // 4. Fallback for Next.js routing (404s or client side catch-all)
-      const finalPath = path.normalize(path.join(frontendBuildPath, 'index.html'));
-      return callback({ path: finalPath });
+      const finalPath = path.normalize(filePath);
+      const fileUrl = pathToFileURL(finalPath).toString();
+      return await net.fetch(fileUrl);
     } catch (e) {
       console.error("[APP-PROTOCOL] Error", e);
-      return callback({ error: -6 }); // net::ERR_FILE_NOT_FOUND
+      return new Response('Not Found', { status: 404 });
     }
   });
 
@@ -183,6 +197,19 @@ function setupIpcHandlers() {
     return null;
   });
 
+  ipcMain.handle('select-files', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Multimedia', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'mov', 'avi', 'webm'] }
+      ]
+    });
+    if (!result.canceled) {
+      return result.filePaths;
+    }
+    return [];
+  });
+
   ipcMain.handle('read-image', async (event, filePath) => {
     try {
       if (fs.existsSync(filePath)) {
@@ -192,7 +219,13 @@ function setupIpcHandlers() {
         if (ext === '.png') mimeType = 'image/png';
         if (ext === '.gif') mimeType = 'image/gif';
         if (ext === '.webp') mimeType = 'image/webp';
+        if (ext === '.mp4') mimeType = 'video/mp4';
+        if (ext === '.mov') mimeType = 'video/quicktime';
+        if (ext === '.avi') mimeType = 'video/x-msvideo';
+        if (ext === '.webm') mimeType = 'video/webm';
 
+        // For large videos, returning base64 may crash IPC. We're keeping it for compatibility,
+        // but frontend usually uses local-file:// or blob:// instead anyway.
         return {
           success: true,
           data: `data:${mimeType};base64,${fileBuffer.toString('base64')}`
@@ -263,14 +296,10 @@ function setupIpcHandlers() {
         return { success: false, error: "Archivo no encontrado" };
       }
 
-      const fileBuffer = fs.readFileSync(filePath);
-      const base64 = fileBuffer.toString('base64');
-      const mimeType = filePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-
       const settings = getSettings();
       const apiKey = settings.googleApiKey;
 
-      return await analyzeImageHandler(base64, mimeType, customPrompt, apiKey);
+      return await analyzeImageHandler(filePath, customPrompt, apiKey);
     } catch (error: any) {
       console.error("Analyze error:", error);
       return { success: false, error: "Error al analizar la imagen: " + error.message };
